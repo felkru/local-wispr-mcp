@@ -28,42 +28,54 @@ speech recognition to any MCP client — Claude Code, Claude Desktop, Cursor, Ze
 
 ## Install
 
+Install the server as a user-global `uv` tool. This puts a `local-wispr-mcp`
+executable on your `PATH` so every MCP client — in any working directory —
+can launch it without a wrapper:
+
+```bash
+uv tool install git+https://github.com/felkru/local-wispr-mcp
+```
+
+Or from a local checkout:
+
 ```bash
 git clone https://github.com/felkru/local-wispr-mcp.git
 cd local-wispr-mcp
-uv sync
+uv tool install .
 ```
+
+`uv` creates a dedicated venv under `~/.local/share/uv/tools/local-wispr-mcp/`
+and symlinks the entry point to `~/.local/bin/local-wispr-mcp`. Make sure
+`~/.local/bin` is on your `PATH` (`uv tool update-shell` does this for you).
 
 The first transcription call triggers a ~1–2 GB download of the default model
 (`mlx-community/parakeet-tdt-0.6b-v3`) from Hugging Face. This is cached under
 `~/.cache/huggingface/hub` and reused on every subsequent call.
 
+> **Why `uv tool install` and not `uv sync` + `uv run`?** `uv sync` installs
+> the project in *editable* mode using a `.pth` file, which `uv` writes with
+> macOS APFS compression. Python 3.12+ treats those compressed `.pth` files
+> as hidden and refuses to load them — so the package becomes un-importable
+> and the MCP server fails to start. `uv tool install` performs a regular
+> (non-editable) install that doesn't rely on `.pth` loading and is immune
+> to the bug.
+
 ## Wire it into an MCP client
 
-### Claude Code (CLI)
+### Claude Code (CLI) — user scope
 
-From inside the repo:
+Register at user scope so the server is available in every project:
 
 ```bash
-claude mcp add local-wispr -- uv run --directory "$(pwd)" local-wispr-mcp
+claude mcp add local-wispr --scope user -- local-wispr-mcp
 ```
 
-Or edit `~/.claude/settings.json` (or a project-scoped `.mcp.json`) directly:
+Verify:
 
-```json
-{
-  "mcpServers": {
-    "local-wispr": {
-      "command": "uv",
-      "args": [
-        "run",
-        "--directory",
-        "/absolute/path/to/local-wispr-mcp",
-        "local-wispr-mcp"
-      ]
-    }
-  }
-}
+```bash
+claude mcp get local-wispr
+# → Scope: User config (available in all your projects)
+# → Status: ✓ Connected
 ```
 
 ### Claude Desktop
@@ -74,26 +86,22 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "local-wispr": {
-      "command": "uv",
-      "args": [
-        "run",
-        "--directory",
-        "/absolute/path/to/local-wispr-mcp",
-        "local-wispr-mcp"
-      ]
+      "command": "local-wispr-mcp"
     }
   }
 }
 ```
 
-Then restart Claude Desktop.
+If Claude Desktop can't find the executable on its `PATH`, use the absolute
+path `/Users/<you>/.local/bin/local-wispr-mcp` instead. Restart Claude
+Desktop afterwards.
 
 ### Any other MCP client
 
 This is a standard stdio MCP server. Start it with:
 
 ```bash
-uv run local-wispr-mcp
+local-wispr-mcp
 ```
 
 and point your client at that command.
@@ -232,6 +240,16 @@ and `pip install hf-transfer` for faster transfers, or pre-download with
 
 **Transcribes but returns empty text** — the file probably contains no
 speech, or the audio track is corrupted. Try playing it back first.
+
+**Server shows `✗ Failed to connect` or startup hangs** — you're almost
+certainly on the `uv sync` / `uv run` path on Python 3.12+. Switch to
+`uv tool install .` (see the [Install](#install) section). To confirm
+the cause: `uv run --directory /path/to/local-wispr-mcp python -c "import
+local_wispr_mcp"` — if that errors with `ModuleNotFoundError`, the editable
+`.pth` is being skipped by Python as a "hidden" file and you need the tool
+install.
+
+**Upgrade to a newer version** — `uv tool install git+https://github.com/felkru/local-wispr-mcp --force`.
 
 ## License
 
