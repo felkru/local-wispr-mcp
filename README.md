@@ -223,8 +223,12 @@ by a large margin. A 10-minute podcast transcribes in roughly 15–40 seconds
 depending on the chip. Cold start adds a few seconds for model load; model
 download (one-off) depends on your connection.
 
-For very long files (hours), the underlying library chunks internally — you
-don't need to split the input yourself.
+Clips up to ~90 seconds are transcribed in one pass so the model can use
+unified attention across the whole audio. For longer files (minutes to
+hours) the server activates parakeet-mlx's built-in streaming with
+`chunk_duration=120s, overlap_duration=15s` — without this, a 56-minute
+file would need ~11 GB of contiguous Metal buffer and OOM on most Apple
+Silicon chips. You don't need to split the input yourself either way.
 
 ## Troubleshooting
 

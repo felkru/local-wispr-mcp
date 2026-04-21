@@ -131,9 +131,23 @@ def transcribe(
 
     wav_path = decode_to_wav(src)
     try:
+        # 16 kHz mono s16 WAV ⇒ 32000 bytes/sec. The 44-byte header is a lower
+        # bound we tolerate being slightly off; we only need a rough duration.
+        duration_s = max(0.0, (wav_path.stat().st_size - 44) / 32000.0)
         model = _load_model()
         with _model_lock:
-            result = model.transcribe(str(wav_path))
+            # Chunk only when necessary. Short clips fit in Metal as a single
+            # tensor and benefit from unified attention; long files (≳5 min on
+            # a 9.5 GB Metal cap) OOM without chunking, so we hand them to the
+            # library's built-in streaming with the CLI defaults.
+            if duration_s > 90.0:
+                result = model.transcribe(
+                    str(wav_path),
+                    chunk_duration=120.0,
+                    overlap_duration=15.0,
+                )
+            else:
+                result = model.transcribe(str(wav_path))
     finally:
         try:
             wav_path.unlink(missing_ok=True)
