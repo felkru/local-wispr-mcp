@@ -108,7 +108,7 @@ and point your client at that command.
 
 ## Tools
 
-### `transcribe(path, format="text")`
+### `transcribe(path, format="text", save_to=None)`
 
 Transcribe a local audio or video file.
 
@@ -116,6 +116,7 @@ Transcribe a local audio or video file.
 |---|---|---|---|
 | `path` | string | — | Absolute path (or `~`-prefixed) to the file on this machine. |
 | `format` | `"text"` \| `"json"` \| `"srt"` \| `"vtt"` | `"text"` | Output format. |
+| `save_to` | string \| `null` | `null` | If set, write the transcript to this file and return a short status line instead of the full transcript. Use this for anything longer than a couple of minutes so the transcript doesn't flood the LLM's context. Parent directories are created automatically; existing files are overwritten. |
 
 **Output formats — when to use each:**
 

@@ -102,6 +102,7 @@ mcp = FastMCP("local-wispr-mcp")
 def transcribe(
     path: str,
     format: OutputFormat = "text",
+    save_to: str | None = None,
 ) -> str:
     """Transcribe a local audio or video file using NVIDIA Parakeet (MLX).
 
@@ -117,10 +118,19 @@ def transcribe(
             - "json":  {"text": "...", "sentences": [{"text", "start", "end"}, ...]}
             - "srt":   SubRip subtitle file contents.
             - "vtt":   WebVTT subtitle file contents.
+        save_to: Optional absolute or ~-prefixed path. If given, the transcript
+            is written to this file instead of being returned inline. The tool
+            then returns a short status line (path, byte count, audio duration,
+            wall time). Use this for anything longer than a couple of minutes
+            so the transcript doesn't flood the LLM's context. Parent
+            directories are created if needed. An existing file is overwritten.
 
     Returns:
-        The transcript in the requested format as a single string.
+        When `save_to` is None: the transcript in the requested format.
+        When `save_to` is set:  a short status string referencing the file.
     """
+    import time
+    t0 = time.time()
     require_ffmpeg()  # surface a clear error early if ffmpeg is missing
 
     src = Path(path).expanduser()
@@ -155,14 +165,30 @@ def transcribe(
             pass
 
     if format == "text":
-        return result.text.strip() + "\n"
-    if format == "json":
-        return _render_json(result)
-    if format == "srt":
-        return _render_srt(result.sentences)
-    if format == "vtt":
-        return _render_vtt(result.sentences)
-    raise ValueError(f"Unknown format: {format!r}")
+        rendered = result.text.strip() + "\n"
+    elif format == "json":
+        rendered = _render_json(result)
+    elif format == "srt":
+        rendered = _render_srt(result.sentences)
+    elif format == "vtt":
+        rendered = _render_vtt(result.sentences)
+    else:
+        raise ValueError(f"Unknown format: {format!r}")
+
+    if save_to is not None:
+        dest = Path(save_to).expanduser()
+        if not dest.is_absolute():
+            dest = dest.resolve()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(rendered, encoding="utf-8")
+        dur_min, dur_sec = divmod(int(duration_s), 60)
+        return (
+            f"Wrote {format} transcript to {dest} "
+            f"({len(rendered):,} chars, audio {dur_min}m{dur_sec:02d}s, "
+            f"transcribed in {time.time()-t0:.1f}s)\n"
+        )
+
+    return rendered
 
 
 @mcp.tool()
