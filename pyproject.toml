@@ -22,6 +22,7 @@ dependencies = [
 
 [project.scripts]
 local-wispr-mcp = "local_wispr_mcp.server:main"
+transcribe = "local_wispr_mcp.cli:main"
 
 [build-system]
 requires = ["hatchling"]

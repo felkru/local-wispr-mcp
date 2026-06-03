@@ -106,6 +106,31 @@ local-wispr-mcp
 
 and point your client at that command.
 
+## Command-line interface (`transcribe`)
+
+The same install also provides a `transcribe` CLI on your `PATH`. It is a thin
+front end over the **exact same** transcription core as the MCP server
+(`src/local_wispr_mcp/core.py`) — same model, ffmpeg decode, chunking, and
+renderers — so the two never diverge.
+
+```bash
+transcribe meeting.m4a                 # → ./meeting.txt
+transcribe -o ~/notes a.m4a b.mp3      # → ~/notes/a.txt, ~/notes/b.txt
+transcribe --format srt talk.mp4       # → ./talk.srt
+transcribe --stdout voicmemo.m4a       # print transcript, write no file
+transcribe --model-info                # show model + cache, no download
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-f, --format` | `text` (default), `txt` (alias), `json`, `srt`, `vtt` |
+| `-o, --output-dir DIR` | Where to write `<basename>.<ext>` (default: CWD) |
+| `--stdout` | Print to stdout instead of writing a file |
+| `--model-info` | Print configured model + cache location, then exit |
+
+Multiple files are processed in sequence; a failure on one file is reported on
+stderr and the rest still run.
+
 ## Tools
 
 ### `transcribe(path, format="text", save_to=None)`
