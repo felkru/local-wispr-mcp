@@ -1,12 +1,30 @@
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
 .venv/
 venv/
 dist/
 build/
 *.egg-info/
 uv.lock.bak
-.DS_Store
 .ruff_cache/
 .pytest_cache/
 .mypy_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
