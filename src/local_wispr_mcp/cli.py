@@ -40,9 +40,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="transcribe",
         description=(
-            "Transcribe audio/video with NVIDIA Parakeet (MLX). Shares its engine "
+            "Transcribe audio/video locally on MLX (Whisper/Parakeet). Shares its engine "
             f"with the local-wispr-mcp server. Model: {DEFAULT_MODEL} "
-            "(override via $PARAKEET_MODEL)."
+            "(override via $WISPR_MODEL)."
         ),
     )
     p.add_argument(

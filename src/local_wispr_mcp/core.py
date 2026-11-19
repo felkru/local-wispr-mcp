@@ -1,10 +1,17 @@
-"""Shared Parakeet (MLX) transcription core.
+"""Shared MLX transcription core (Whisper or Parakeet).
 
 This module is the single source of truth for transcription. Both the MCP
 server (`server.py`) and the `transcribe` CLI (`cli.py`) call into here so the
 model choice, chunking heuristics, ffmpeg decode, and output renderers never
 diverge. It deliberately has NO dependency on the `mcp` package so the CLI
 stays lightweight.
+
+Three backends, selected by model name:
+  - "scribe_v2" / "scribe_v1"  → ElevenLabs Speech-to-Text API (cloud; needs
+    $ELEVENLABS_API_KEY or ~/.config/elevenlabs/key; diarization built in)
+  - name containing "whisper"  → mlx-whisper (local)
+  - anything else              → parakeet-mlx (local, the default)
+Set $WISPR_MODEL to switch, e.g. WISPR_MODEL=scribe_v2 transcribe foo.m4a.
 """
 
 from __future__ import annotations
@@ -18,7 +25,11 @@ from typing import Any, Literal
 
 from local_wispr_mcp.audio import decode_to_wav, require_ffmpeg
 
-DEFAULT_MODEL = os.environ.get("PARAKEET_MODEL", "mlx-community/parakeet-tdt-0.6b-v3")
+DEFAULT_MODEL = (
+    os.environ.get("WISPR_MODEL")
+    or os.environ.get("PARAKEET_MODEL")  # honored for backward compatibility
+    or "mlx-community/parakeet-tdt-0.6b-v3"
+)
 CACHE_DIR = os.environ.get("PARAKEET_CACHE_DIR")  # None → HF default (~/.cache/huggingface)
 
 OutputFormat = Literal["text", "json", "srt", "vtt"]
@@ -27,6 +38,101 @@ log = logging.getLogger("local-wispr-mcp")
 
 _model = None
 _model_lock = threading.Lock()
+
+if DEFAULT_MODEL.lower().startswith("scribe"):
+    BACKEND = "elevenlabs"
+elif "whisper" in DEFAULT_MODEL.lower():
+    BACKEND = "mlx-whisper"
+else:
+    BACKEND = "parakeet-mlx"
+
+
+def _elevenlabs_key() -> str:
+    key = os.environ.get("ELEVENLABS_API_KEY")
+    if not key:
+        key_file = Path.home() / ".config" / "elevenlabs" / "key"
+        if key_file.is_file():
+            key = key_file.read_text().strip()
+    if not key:
+        raise RuntimeError(
+            "ElevenLabs API key not found — set $ELEVENLABS_API_KEY or write it "
+            "to ~/.config/elevenlabs/key (chmod 600)."
+        )
+    return key
+
+
+def _transcribe_scribe(wav_path: Path):
+    """ElevenLabs Speech-to-Text (Scribe). Adapts the words-level response to
+    the Parakeet result shape; sentences break on speaker change or terminal
+    punctuation, and carry a `speaker` attr when diarization found speakers.
+    If more than one speaker is present, `.text` becomes speaker-turn lines."""
+    from types import SimpleNamespace
+
+    import httpx
+
+    with open(wav_path, "rb") as f:
+        resp = httpx.post(
+            "https://api.elevenlabs.io/v1/speech-to-text",
+            headers={"xi-api-key": _elevenlabs_key()},
+            data={"model_id": DEFAULT_MODEL, "diarize": "true",
+                  "tag_audio_events": "false"},
+            files={"file": (wav_path.name, f, "audio/wav")},
+            timeout=600.0,
+        )
+    resp.raise_for_status()
+    out = resp.json()
+
+    sentences = []
+    cur: list[str] = []
+    cur_speaker = None
+    cur_start = cur_end = 0.0
+    def flush():
+        if cur:
+            sentences.append(SimpleNamespace(
+                text=" ".join(cur), start=cur_start, end=cur_end,
+                speaker=cur_speaker,
+            ))
+    for w in out.get("words") or []:
+        if w.get("type") == "spacing":
+            continue
+        if cur and w.get("speaker_id") != cur_speaker:
+            flush()
+            cur = []
+        if not cur:
+            cur_speaker = w.get("speaker_id")
+            cur_start = w.get("start", 0.0)
+        cur.append(w.get("text", ""))
+        cur_end = w.get("end", cur_start)
+        if w.get("text", "").rstrip().endswith((".", "?", "!")):
+            flush()
+            cur = []
+    flush()
+
+    speakers = {s.speaker for s in sentences if s.speaker is not None}
+    if len(speakers) > 1:
+        text = "\n".join(f"{s.speaker}: {s.text}" for s in sentences)
+    else:
+        text = out.get("text", "")
+    return SimpleNamespace(text=text, sentences=sentences)
+
+
+def _transcribe_whisper(wav_path: Path):
+    """Run mlx-whisper and adapt its dict result to the Parakeet result shape
+    (`.text` + `.sentences[i].text/.start/.end`) so the renderers below work
+    unchanged. mlx_whisper caches the loaded model process-wide (ModelHolder),
+    so repeated calls stay hot just like the Parakeet path."""
+    from types import SimpleNamespace
+
+    import mlx_whisper
+
+    out = mlx_whisper.transcribe(str(wav_path), path_or_hf_repo=DEFAULT_MODEL)
+    return SimpleNamespace(
+        text=out["text"],
+        sentences=[
+            SimpleNamespace(text=s["text"], start=s["start"], end=s["end"])
+            for s in out.get("segments", [])
+        ],
+    )
 
 
 def _load_model():
@@ -88,6 +194,7 @@ def _render_json(result) -> str:
         "text": result.text,
         "sentences": [
             {"text": s.text, "start": round(s.start, 3), "end": round(s.end, 3)}
+            | ({"speaker": sp} if (sp := getattr(s, "speaker", None)) is not None else {})
             for s in result.sentences
         ],
     }
@@ -123,20 +230,29 @@ def transcribe_file(
         # 16 kHz mono s16 WAV ⇒ 32000 bytes/sec. The 44-byte header is a lower
         # bound we tolerate being slightly off; we only need a rough duration.
         duration_s = max(0.0, (wav_path.stat().st_size - 44) / 32000.0)
-        model = _load_model()
-        with _model_lock:
-            # Chunk only when necessary. Short clips fit in Metal as a single
-            # tensor and benefit from unified attention; long files (≳5 min on
-            # a 9.5 GB Metal cap) OOM without chunking, so we hand them to the
-            # library's built-in streaming with the CLI defaults.
-            if duration_s > 90.0:
-                result = model.transcribe(
-                    str(wav_path),
-                    chunk_duration=120.0,
-                    overlap_duration=15.0,
-                )
-            else:
-                result = model.transcribe(str(wav_path))
+        if BACKEND == "elevenlabs":
+            result = _transcribe_scribe(wav_path)
+        elif BACKEND == "mlx-whisper":
+            global _model
+            with _model_lock:
+                # Whisper windows 30 s internally — no manual chunking needed.
+                result = _transcribe_whisper(wav_path)
+                _model = "whisper (cached inside mlx_whisper)"
+        else:
+            model = _load_model()
+            with _model_lock:
+                # Chunk only when necessary. Short clips fit in Metal as a single
+                # tensor and benefit from unified attention; long files (≳5 min on
+                # a 9.5 GB Metal cap) OOM without chunking, so we hand them to the
+                # library's built-in streaming with the CLI defaults.
+                if duration_s > 90.0:
+                    result = model.transcribe(
+                        str(wav_path),
+                        chunk_duration=120.0,
+                        overlap_duration=15.0,
+                    )
+                else:
+                    result = model.transcribe(str(wav_path))
     finally:
         try:
             wav_path.unlink(missing_ok=True)
@@ -174,6 +290,7 @@ def model_info_dict() -> dict:
     """Return configured model + cache info without downloading anything."""
     return {
         "model": DEFAULT_MODEL,
+        "backend": BACKEND,
         "cache_dir": CACHE_DIR
             or os.environ.get("HF_HUB_CACHE")
             or os.environ.get("HF_HOME")

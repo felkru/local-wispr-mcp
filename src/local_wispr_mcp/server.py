@@ -1,4 +1,4 @@
-"""FastMCP server exposing local Parakeet transcription over stdio.
+"""FastMCP server exposing local MLX transcription (Whisper/Parakeet) over stdio.
 
 All transcription behaviour lives in `local_wispr_mcp.core`; the tools here are
 thin MCP-facing wrappers so the server and the `transcribe` CLI stay DRY.
@@ -27,7 +27,7 @@ def transcribe(
     format: OutputFormat = "text",
     save_to: str | None = None,
 ) -> str:
-    """Transcribe a local audio or video file using NVIDIA Parakeet (MLX).
+    """Transcribe a local audio or video file locally on MLX (Whisper large-v3 by default).
 
     Any format ffmpeg can decode is supported (mp3, m4a, aac, flac, ogg, opus,
     wav, wma, aiff, webm, mp4, mkv, mov, ...). The file is decoded to 16 kHz
@@ -57,7 +57,7 @@ def transcribe(
 
 @mcp.tool()
 def model_info() -> str:
-    """Return which Parakeet model is configured and where its cache lives.
+    """Return which model/backend is configured and where its cache lives.
 
     Does NOT download the model — safe to call before first transcription.
     """

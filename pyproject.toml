@@ -1,7 +1,7 @@
 [project]
 name = "local-wispr-mcp"
 version = "0.1.0"
-description = "Local MCP server for audio transcription using NVIDIA Parakeet on Apple Silicon (MLX)."
+description = "Local MCP server + CLI for audio transcription on Apple Silicon (MLX): Whisper large-v3 by default, Parakeet supported."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
@@ -17,6 +17,8 @@ classifiers = [
 dependencies = [
     "mcp>=1.27.0",
     "parakeet-mlx>=0.5.1",
+    "mlx-whisper>=0.4.2",
+    "httpx>=0.27",
     "numpy>=2.0",
 ]
 
